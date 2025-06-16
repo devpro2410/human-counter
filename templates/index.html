@@ -1,0 +1,312 @@
+{% extends "base.html" %} {% block content %}
+<div class="row">
+  <div class="col-md-8 mx-auto">
+    <h1 class="text-center mb-4">
+      <i class="fas fa-users text-primary"></i>
+      Human Counting System
+    </h1>
+    <p class="text-center text-muted mb-4">
+      Upload an image or video to detect and count people using AI-powered
+      computer vision
+    </p>
+
+    <!-- Model Status -->
+    <div
+      id="modelStatus"
+      class="model-status {% if model_ready %}model-ready{% else %}model-not-ready{% endif %}"
+    >
+      {% if model_ready %}
+      <i class="fas fa-check-circle"></i>
+      <strong>System Ready:</strong> YOLO model files are loaded and ready for
+      detection. {% else %}
+      <i class="fas fa-exclamation-triangle"></i>
+      <strong>Setup Required:</strong> Please download the YOLO model files
+      first.
+      <a href="{{ url_for('setup') }}" class="btn btn-sm btn-warning ms-2">
+        <i class="fas fa-download"></i> Setup Now
+      </a>
+      {% endif %}
+    </div>
+
+    <!-- Upload Area -->
+    <div
+      class="upload-area"
+      id="uploadArea"
+      {%
+      if
+      not
+      model_ready
+      %}style="opacity: 0.5; pointer-events: none;"
+      {%
+      endif
+      %}
+    >
+      <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
+      <h4>Drop files here or click the button below to upload</h4>
+      <p class="text-muted">
+        Supported formats: Images (JPG, PNG, BMP) • Videos (MP4, AVI, MOV)<br />
+        Maximum file size: 100MB
+      </p>
+      <input
+        type="file"
+        id="fileInput"
+        class="d-none"
+        accept="image/*,video/*"
+      />
+      <button class="btn btn-primary btn-lg" id="uploadBtn">
+        <i class="fas fa-upload"></i> Choose File
+      </button>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div class="text-center loading-spinner" id="loadingSpinner" style="display: none"> 
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Processing...</span>
+      </div>
+      <p class="mt-2">Processing your file... This may take a few moments.</p>
+    </div>
+
+    <!-- Results -->
+    <div id="results" class="result-container" style="display: none">
+      <div class="row">
+        <div class="col-md-6">
+          <h5><i class="fas fa-chart-bar"></i> Detection Results</h5>
+          <div class="d-flex align-items-center mb-3">
+            <span class="me-2">People Detected:</span>
+            <span class="people-count" id="peopleCount">0</span>
+          </div>
+          <div class="mb-3">
+            <strong>File:</strong> <span id="fileName"></span><br />
+            <strong>Type:</strong> <span id="fileType"></span><br />
+          </div>
+          <div class="d-grid gap-2">
+            <button class="btn btn-success" id="downloadBtn">
+              <i class="fas fa-download"></i> Download Processed File
+            </button>
+            <button class="btn btn-outline-primary" id="processAnotherBtn">
+              <i class="fas fa-plus"></i> Process Another File
+            </button>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <h5><i class="fas fa-eye"></i> Preview</h5>
+          <div id="previewContainer">
+            <img
+              id="previewImage"
+              class="img-fluid rounded"
+              style="display: none; max-height: 400px"
+            />
+            <video
+              id="previewVideo"
+              class="img-fluid rounded"
+              controls
+              style="display: none; max-height: 400px"
+            >
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error Alert -->
+    <div id="errorAlert" class="alert alert-danger" style="display: none">
+      <i class="fas fa-exclamation-circle"></i>
+      <span id="errorMessage"></span>
+    </div>
+  </div>
+</div>
+{% endblock %} {% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const results = document.getElementById('results');
+    const errorAlert = document.getElementById('errorAlert');
+    const loadingSpinner = document.getElementById('loadingSpinner'); // Spinner reference
+
+    let fileHandled = false;
+
+    function checkModelStatus() {
+      fetch('/api/check-models')
+        .then((response) => response.json())
+        .then((data) => {
+          const statusDiv = document.getElementById('modelStatus');
+          if (data.ready) {
+            statusDiv.className = 'model-status model-ready';
+            statusDiv.innerHTML = `
+              <i class="fas fa-check-circle"></i>
+              <strong>System Ready:</strong> YOLO model files are loaded and ready for detection.
+            `;
+            uploadArea.style.opacity = '1';
+            uploadArea.style.pointerEvents = 'auto';
+          } else {
+            statusDiv.className = 'model-status model-not-ready';
+            statusDiv.innerHTML = `
+              <i class="fas fa-exclamation-triangle"></i>
+              <strong>Setup Required:</strong> Please download the YOLO model files first.
+              <a href="/setup" class="btn btn-sm btn-warning ms-2">
+                <i class="fas fa-download"></i> Setup Now
+              </a>
+            `;
+            uploadArea.style.opacity = '0.5';
+            uploadArea.style.pointerEvents = 'none';
+          }
+        });
+    }
+
+    checkModelStatus();
+
+    uploadBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fileInput.click();
+    });
+
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.classList.remove('dragover');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        handleFile(files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (fileHandled) return;
+      fileHandled = true;
+      const file = e.target.files[0];
+      if (file) {
+        handleFile(file);
+      }
+      setTimeout(() => {
+        fileHandled = false;
+      }, 1000);
+    });
+
+    function handleFile(file) {
+      const allowedTypes = [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/bmp',
+        'image/gif',
+        'image/tiff',
+        'video/mp4',
+        'video/avi',
+        'video/mov',
+        'video/mkv',
+        'video/flv',
+        'video/wmv',
+      ];
+
+      if (
+        !allowedTypes.includes(file.type) &&
+        !file.name.match(
+          /\.(jpg|jpeg|png|bmp|gif|tiff|mp4|avi|mov|mkv|flv|wmv)$/i
+        )
+      ) {
+        showError('Please select a valid image or video file.');
+        return;
+      }
+
+      if (file.size > 100 * 1024 * 1024) {
+        showError('File size must be less than 100MB.');
+        return;
+      }
+
+      uploadFile(file);
+    }
+
+    function uploadFile(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      hideError();
+      uploadArea.style.display = 'none';
+      loadingSpinner.style.display = 'block'; // Show spinner
+
+      fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          loadingSpinner.style.display = 'none'; // Hide spinner
+          if (data.success) {
+            showResults(data);
+          } else {
+            showError(
+              data.error || 'An error occurred while processing the file.'
+            );
+            resetUI();
+          }
+        })
+        .catch((error) => {
+          loadingSpinner.style.display = 'none'; // Hide spinner
+          showError('Network error: ' + error.message);
+          resetUI();
+        });
+    }
+
+    function showResults(data) {
+      document.getElementById('peopleCount').textContent = data.people_count;
+      document.getElementById('fileName').textContent = data.original_filename;
+      document.getElementById('fileType').textContent =
+        data.file_type.charAt(0).toUpperCase() + data.file_type.slice(1);
+
+      const previewImage = document.getElementById('previewImage');
+      const previewVideo = document.getElementById('previewVideo');
+
+      if (data.file_type === 'image') {
+        previewImage.src = data.processed_url;
+        previewImage.style.display = 'block';
+        previewVideo.style.display = 'none';
+      } else {
+        previewVideo.src = data.processed_url;
+        previewVideo.style.display = 'block';
+        previewImage.style.display = 'none';
+      }
+
+      document.getElementById('downloadBtn').onclick = () => {
+        window.open(data.download_url, '_blank');
+      };
+
+      results.style.display = 'block';
+    }
+
+    function showError(message) {
+      document.getElementById('errorMessage').textContent = message;
+      errorAlert.style.display = 'block';
+    }
+
+    function hideError() {
+      errorAlert.style.display = 'none';
+    }
+
+    function resetUI() {
+      uploadArea.style.display = 'block';
+      loadingSpinner.style.display = 'none'; // Also hide spinner here for safety
+    }
+
+    document
+      .getElementById('processAnotherBtn')
+      .addEventListener('click', () => {
+        results.style.display = 'none';
+        hideError();
+        fileInput.value = '';
+        uploadArea.style.display = 'block';
+        loadingSpinner.style.display = 'none'; // Hide spinner just in case
+      });
+  });
+</script>
+{% endblock %}
